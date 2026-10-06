@@ -1081,3 +1081,55 @@ Bandingkan Laravel Sanctum: cek token = query table `personal_access_tokens` (bu
 2. **Betul** — backend cukup validasi tanpa simpan token ke DB.
    Tapi backend TETAP menyimpan **secret** (di `appsettings.json`) — tanpa secret, validasi tidak mungkin.
 3. **Nuansa** — "stateless" itu *default*, bukan aturan mutlak. Server BOLEH menyimpan token jika butuh revocation (logout semua device, blokir user) → itu namanya blacklist/refresh token table.
+
+## Keamanan Config di .NET: Jangan Commit Secret
+
+### Hierarki konfigurasi (dibaca dari bawah ke atas, yang bawah menang)
+
+```text
+appsettings.json              ← boleh di-commit, ISI TANPA secret
+appsettings.{Environment}.json
+User Secrets (dev only)       ← secret lokal, DI LUAR folder project, tidak pernah ter-commit
+Environment variables         ← production (Docker/K8s/CI)
+```
+
+### User Secrets (perintah)
+
+```bash
+dotnet user-secrets init                              # sekali saja, tambah UserSecretsId ke csproj
+dotnet user-secrets set "Jwt:Key" "rahasia..."        # simpan nilai
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "..."
+dotnet user-secrets list                              # lihat
+```
+
+Penyimpanan Windows: `%APPAPPDATA%\microsoft\UserSecrets\{id}\secrets.json`
+→ di LUAR repo, jadi mustahil ter-commit. Otomatis terbaca saat `ASPNETCORE_ENVIRONMENT=Development`.
+
+### Perbandingan Laravel
+
+| Laravel | .NET |
+|---------|------|
+| `.env` (di-gitignore) | User Secrets (dev) / env vars (prod) |
+| `config('key')` baca `.env` | `builder.Configuration["Jwt:Key"]` |
+| `.env.example` (template, di-commit) | `appsettings.json` kosong (template, di-commit) |
+
+**Konsep sama:** `.env` tidak di-commit, `.env.example` di-commit. `appsettings.json` berisi struktur kosong, nilai rahasia di secret store.
+
+### .gitignore .NET yang wajib ada
+
+```
+[Bb]in/            # hasil build
+[Oo]bj/            # file intermediate
+.vs/               # Visual Studio
+.idea/             # Rider
+*.user, *.suo      # file user-specific
+TestResults/       # hasil test/coverage
+*.local.json       # override config lokal
+.env, .env.*       # environment file
+```
+
+### Lessons learned (repo ini)
+
+1. Secret yang sudah ter-commit tetap ada di **history** — menghapus di file terbaru tidak cukup.
+2. Fix: rewrite history (`git filter-repo --replace-text`) + force push, lalu bersihkan object lama di GitHub (GC / recreate repo).
+3. Selalu scan sebelum push: `git log -S "password" --oneline`
