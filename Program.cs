@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Tickset.Data;
+using Tickset.Endpoints;
+using Tickset.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +10,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddScoped<AuthService>();
 
 var app = builder.Build();
 
@@ -37,6 +41,8 @@ app.MapGet("/weatherforecast", () =>
     return forecast;
 })
 .WithName("GetWeatherForecast");
+
+app.MapAuthEndpoints();
 
 app.Run();
 

@@ -72,23 +72,15 @@ namespace Tickset.Migrations
 
             modelBuilder.Entity("Tickset.Models.RolePermission", b =>
                 {
-                    b.Property<int>("RoleId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PermissionId")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("PermissionId1")
+                    b.Property<Guid>("RoleId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("RoleId1")
+                    b.Property<Guid>("PermissionId")
                         .HasColumnType("uuid");
 
                     b.HasKey("RoleId", "PermissionId");
 
-                    b.HasIndex("PermissionId1");
-
-                    b.HasIndex("RoleId1");
+                    b.HasIndex("PermissionId");
 
                     b.ToTable("RolePermissions");
                 });
@@ -119,23 +111,15 @@ namespace Tickset.Migrations
 
             modelBuilder.Entity("Tickset.Models.TeamMember", b =>
                 {
-                    b.Property<int>("TeamId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("TeamId1")
+                    b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("UserId1")
+                    b.Property<Guid>("TeamId")
                         .HasColumnType("uuid");
 
-                    b.HasKey("TeamId", "UserId");
+                    b.HasKey("UserId", "TeamId");
 
-                    b.HasIndex("TeamId1");
-
-                    b.HasIndex("UserId1");
+                    b.HasIndex("TeamId");
 
                     b.ToTable("TeamMembers");
                 });
@@ -178,23 +162,15 @@ namespace Tickset.Migrations
 
             modelBuilder.Entity("Tickset.Models.UserRole", b =>
                 {
-                    b.Property<int>("UserId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("RoleId")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("RoleId1")
+                    b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("UserId1")
+                    b.Property<Guid>("RoleId")
                         .HasColumnType("uuid");
 
                     b.HasKey("UserId", "RoleId");
 
-                    b.HasIndex("RoleId1");
-
-                    b.HasIndex("UserId1");
+                    b.HasIndex("RoleId");
 
                     b.ToTable("UserRoles");
                 });
@@ -203,13 +179,13 @@ namespace Tickset.Migrations
                 {
                     b.HasOne("Tickset.Models.Permission", "Permission")
                         .WithMany("RolePermissions")
-                        .HasForeignKey("PermissionId1")
+                        .HasForeignKey("PermissionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("Tickset.Models.Role", "Role")
                         .WithMany("RolePermissions")
-                        .HasForeignKey("RoleId1")
+                        .HasForeignKey("RoleId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -222,13 +198,13 @@ namespace Tickset.Migrations
                 {
                     b.HasOne("Tickset.Models.Team", "Team")
                         .WithMany("TeamMembers")
-                        .HasForeignKey("TeamId1")
+                        .HasForeignKey("TeamId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("Tickset.Models.User", "User")
                         .WithMany("TeamMembers")
-                        .HasForeignKey("UserId1")
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -241,13 +217,13 @@ namespace Tickset.Migrations
                 {
                     b.HasOne("Tickset.Models.Role", "Role")
                         .WithMany("UserRoles")
-                        .HasForeignKey("RoleId1")
+                        .HasForeignKey("RoleId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("Tickset.Models.User", "User")
                         .WithMany("UserRoles")
-                        .HasForeignKey("UserId1")
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

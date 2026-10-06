@@ -16,8 +16,9 @@ This is also a learning project for a developer coming from the JavaScript/TypeS
 
 ## Learning instructions
 
-- Treat this repository as a hands-on C# and .NET learning project, not only a feature-delivery project. The developer's background is JavaScript/TypeScript and NestJS, so explain unfamiliar concepts using those ecosystems as context without replacing idiomatic .NET patterns.
-- Use these ecosystem comparisons when relevant: ASP.NET Core Minimal APIs/controllers are comparable to Next.js route handlers or NestJS controllers; ASP.NET Core dependency injection is comparable to NestJS providers; EF Core is comparable to Prisma/Drizzle; `appsettings.json` and .NET configuration complement Next.js environment configuration; middleware and endpoint filters should be compared with Next.js middleware and request handlers; `IHostedService` should be compared with Node.js background workers.
+- Treat this repository as a hands-on C# and .NET learning project, not only a feature-delivery project. The developer's background is JavaScript/TypeScript, NestJS, and Laravel, so explain unfamiliar concepts using those ecosystems as context without replacing idiomatic .NET patterns.
+- **Perbandingan utama: Laravel.** Gunakan Laravel sebagai pembanding utama untuk semua penjelasan. Tambahkan pembanding lain (NestJS, Prisma, Next.js, TanStack) hanya jika relevan.
+- Use these ecosystem comparisons when relevant: ASP.NET Core Minimal APIs/controllers are comparable to Laravel routes/controllers; ASP.NET Core dependency injection is comparable to Laravel service providers; EF Core is comparable to Eloquent ORM; `appsettings.json` is comparable to Laravel `.env`/config; middleware and endpoint filters are comparable to Laravel middleware; `IHostedService` is comparable to Laravel queue workers/scheduled tasks.
 - For frontend/API consumption, explain how ASP.NET Core APIs, OpenAPI, and DTOs fit with TanStack Query for server-state fetching/caching, TanStack Router for route-driven data loading, and TanStack Table for reporting data. Do not assume TanStack replaces backend validation, authorization, or business rules.
 - Explain C# features such as records, pattern matching, nullable reference types, and dependency injection in contrast to TypeScript where relevant.
 - Use this project to learn .NET-specific patterns: minimal hosting in `Program.cs`, middleware ordering, `appsettings.json`, `IHostedService`, EF Core migrations, configuration, and structured logging.
@@ -68,6 +69,44 @@ Use a modular monolith with these planned modules:
 Identity | Ticketing | Assignment | ServiceLevel | Approvals
 KnowledgeBase | Notifications | Reporting | Auditing
 ```
+
+### Folder structure (layered)
+
+```text
+Tickset/
+├── Models/          ← Domain entities (User, Ticket, Role, etc.)
+├── Data/            ← DbContext, migrations, configuration
+├── Services/        ← Business logic (UserService, TicketService, etc.)
+├── DTOs/            ← Request/Response objects (CreateUserDto, etc.)
+├── Endpoints/       ← Minimal API route handlers
+├── Middlewares/     ← Custom middleware
+├── Enums/           ← Enumerations (TicketStatus, Priority, etc.)
+└── learning-notes.md ← Knowledge base pembelajaran
+```
+
+**Aturan layered structure:**
+- `Models/` → hanya entity class, tidak ada logic
+- `Data/` → DbContext dan konfigurasi database
+- `Services/` → business logic, akses data via `ApplicationDbContext`
+- `DTOs/` → data transfer object untuk request/response
+- `Endpoints/` → route handler, panggil `Services/`
+- Jangan akses `DbContext` langsung dari `Endpoints/`, gunakan `Services/` sebagai perantara
+- Alur dependency: `Endpoints -> Services -> Data`; `DTOs` menjadi kontrak request/response dan `Models` menjadi entity persistence.
+- `Services` tidak boleh mengembalikan entity database langsung ke client; map entity ke DTO di boundary API.
+- `Models` tidak boleh bergantung pada `Services`, `Data`, atau `Endpoints`.
+- Daftarkan service di `Program.cs` melalui DI; jangan membuat service atau `DbContext` dengan `new` di endpoint.
+
+**Perbandingan dengan NestJS:**
+
+| .NET Layer | NestJS |
+|------------|--------|
+| `Models/` | `entities/` |
+| `Data/` | `prisma/` atau `database/` |
+| `Services/` | `services/` |
+| `DTOs/` | `dto/` |
+| `Endpoints/` | `controllers/` |
+| `Middlewares/` | `middleware/` |
+| `Enums/` | `enums/` |
 
 Important planned entities include `User`, `Role`, `Permission`, `Team`, `Ticket`, `TicketType`, `TicketCategory`, `TicketAssignment`, `TicketStatusHistory`, `TicketComment`, `SlaPolicy`, `SlaInstance`, `BusinessCalendar`, `EscalationRule`, `EscalationEvent`, `Notification`, and `AuditLog`. See `Goal.md` section 19 before designing the model.
 

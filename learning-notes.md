@@ -577,3 +577,18 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 - `GetConnectionString("DefaultConnection")` → membaca connection string dari config.
 - Jangan commit `appsettings.json` yang berisi password ke version control.
 - Gunakan `appsettings.Development.json` untuk settings local.
+
+## HTTP Status Code untuk Auth
+
+| Status | Kapan dipakai | Laravel |
+|--------|---------------|---------|
+| 201 Created | Register sukses | `response()->created()` |
+| 200 OK | Login sukses | `response()->json()` |
+| 401 Unauthorized | Password salah / belum login | `abort(401)` |
+| 409 Conflict | Email sudah terdaftar | `abort(409)` |
+
+### Penjelasan
+
+- Status code adalah kontrak antara server dan client — TanStack Query membaca status untuk menentukan apakah query sukses (`2xx`) atau error (`4xx/5xx`).
+- 401 = "siapa kamu?" (tidak terautentikasi), 403 = "kamu tidak boleh" (terautentikasi tapi tidak berwenang).
+- SELALU pakai status code yang benar, jangan 200 untuk semua error.

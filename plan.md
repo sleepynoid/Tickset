@@ -14,6 +14,53 @@ The plan deliberately builds one small working slice at a time. Do not implement
 - PostgreSQL is selected, but its provider, EF Core `DbContext`, migrations, authentication, tests, Docker, and business modules do not exist yet.
 - The repository is a single project with no solution file.
 
+## Folder structure (layered)
+
+```text
+Tickset/
+├── Models/          ← Domain entities (User, Ticket, Role, etc.)
+├── Data/            ← DbContext, migrations, configuration
+├── Services/        ← Business logic (UserService, TicketService, etc.)
+├── DTOs/            ← Request/Response objects (CreateUserDto, etc.)
+├── Endpoints/       ← Minimal API route handlers
+├── Middlewares/     ← Custom middleware
+├── Enums/           ← Enumerations (TicketStatus, Priority, etc.)
+└── learning-notes.md ← Knowledge base pembelajaran
+```
+
+**Aturan layered structure:**
+- `Models/` → hanya entity class, tidak ada logic
+- `Data/` → DbContext dan konfigurasi database
+- `Services/` → business logic, akses data via `ApplicationDbContext`
+- `DTOs/` → data transfer object untuk request/response
+- `Endpoints/` → route handler, panggil `Services/`
+- Jangan akses `DbContext` langsung dari `Endpoints/`, gunakan `Services/` sebagai perantara
+
+### Alur antar-layer
+
+```text
+HTTP request
+    ↓
+Endpoints → DTOs
+    ↓
+Services → Models
+    ↓
+Data/ApplicationDbContext → PostgreSQL
+    ↓
+Services → response DTO
+    ↓
+HTTP response
+```
+
+Rules:
+
+- `Endpoints` menangani HTTP binding, status code, dan memanggil service; jangan taruh business rule di sini.
+- `Services` menangani validasi bisnis, authorization yang terkait resource, transaksi, dan mapping entity ke DTO.
+- `Data` menangani `ApplicationDbContext`, EF Core configuration, migrations, dan query persistence.
+- `Models` hanya mendeskripsikan entity persistence; jangan membuatnya bergantung pada service atau endpoint.
+- `DTOs` menjadi kontrak API; jangan mengembalikan entity database langsung ke client.
+- Daftarkan service melalui DI di `Program.cs`; jangan membuat service atau `DbContext` dengan `new` di endpoint.
+
 ## Working method
 
 For every task, follow this loop:
@@ -45,6 +92,8 @@ Do not generate a full file, module, or application unless explicitly requested.
 5. Add a development connection string without committing secrets.
 6. Create the initial migration and apply it to the database.
 
+**Layer placement:** `BaseEntity` and persistence entities go in `Models/`; `ApplicationDbContext` and EF configuration go in `Data/`; connection registration stays in `Program.cs`.
+
 **Comparison:** EF Core is the .NET equivalent of Prisma/Drizzle; `DbContext` is the database session/client boundary; migrations are similar to Prisma or Drizzle migrations.
 
 **Checkpoint:** `dotnet build` succeeds and `dotnet ef database update` completes successfully.
@@ -61,6 +110,8 @@ Do not generate a full file, module, or application unless explicitly requested.
 2. Add registration and login DTOs and endpoints.
 3. Issue and validate access tokens.
 4. Add authorization policies for roles and permissions.
+
+**Layer placement:** entities go in `Models/`, auth request/response records in `DTOs/`, password/token business logic in `Services/`, and HTTP routes in `Endpoints/`.
 
 **Comparison:** ASP.NET Core DI is similar to NestJS providers; JWT claims and policies are comparable to NestJS guards or NextAuth/Auth.js session authorization, but authorization must remain enforced by the API.
 
@@ -80,6 +131,8 @@ Do not generate a full file, module, or application unless explicitly requested.
 4. Calculate priority from impact and urgency.
 5. Implement allowed status transitions and status history.
 6. Ensure requesters cannot resolve tickets and only resolved tickets can be closed.
+
+**Layer placement:** ticket state and persistence entities go in `Models/`, priority/status logic belongs in a service or explicit domain component, DTOs go in `DTOs/`, and route handlers go in `Endpoints/`.
 
 **Comparison:** Minimal API endpoints are similar to Next.js route handlers; controllers are similar to NestJS controllers; DTOs are request/response types rather than direct database models.
 
