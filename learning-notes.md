@@ -592,3 +592,492 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 - Status code adalah kontrak antara server dan client — TanStack Query membaca status untuk menentukan apakah query sukses (`2xx`) atau error (`4xx/5xx`).
 - 401 = "siapa kamu?" (tidak terautentikasi), 403 = "kamu tidak boleh" (terautentikasi tapi tidak berwenang).
 - SELALU pakai status code yang benar, jangan 200 untuk semua error.
+
+## JWT: Generate vs Validate (2 bagian terpisah)
+
+### Sebelumnya (hanya generate)
+
+```csharp
+var token = tokenService.GenerateToken(user.Id, user.Email);
+return Results.Ok(new { token });
+```
+
+Server **membuat** token, tapi tidak pernah **memeriksa** token yang dikirim client. Jadi endpoint mana pun tetap terbuka.
+
+### Sesudahnya (tambah validate)
+
+```csharp
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options => { /* TokenValidationParameters */ });
+// ...
+app.UseAuthentication();
+app.UseAuthorization();
+```
+
+Server sekarang **memeriksa** token di setiap request yang butuh auth.
+
+### Kenapa 3 bagian?
+
+| Bagian | Fungsi | Analogi Laravel |
+|--------|--------|-----------------|
+| `AddJwtBearer()` + `TokenValidationParameters` | **Daftarkan** cara cek token (secret, issuer, expiry) | `config/auth.php` guard `api` |
+| `app.UseAuthentication()` | **Baca** token dari header `Authorization`, decode jadi `ClaimsPrincipal` | `AuthenticateSession` middleware |
+| `app.UseAuthorization()` | **Putuskan** apakah route boleh diakses | `auth:api` middleware di route |
+
+### Kenapa urutannya penting?
+
+```csharp
+app.UseAuthentication();  // 1. siapa kamu? (decode token → user)
+app.UseAuthorization();   // 2. bolehkah? (cek policy/role)
+```
+
+Sama seperti Laravel: middleware `auth` jalan **sebelum** controller. Kalau urutan dibalik, authorization tidak punya "user" untuk dicek.
+
+### Pipeline lengkap
+
+```text
+Request → Authentication (decode token) → Authorization (cek hak) → Endpoint
+```
+
+### Contoh di Laravel
+
+```php
+Route::middleware('auth:api')->group(function () {
+    Route::get('/me', [UserController::class, 'me']);
+});
+```
+
+```csharp
+// .NET — endpoint terproteksi
+app.MapGet("/api/me", ...).RequireAuthorization();
+```
+
+## Kenapa Service Harus Didaftarkan ke DI di Program.cs?
+
+### Pertanyaan
+
+"TokenService hanya generate token, kenapa perlu `builder.Services.AddScoped<TokenService>()`?"
+
+### Jawaban
+
+Pendaftaran DI **bukan** tentang apa yang dilakukan service, tapi tentang **bagaimana object-nya dibuat dan diambil**.
+
+Endpoint butuh instance `TokenService`:
+
+```csharp
+app.MapPost("/api/auth/login", async (LoginDto dto, AuthService auth, TokenService token) => ...
+//                                                                      ^^^^^^^^^^^^^^^
+//                                            DI container harus tahu cara membuat object ini
+```
+
+Kalau tidak didaftarkan, DI container tidak tahu cara membuat `TokenService` → **runtime error**:
+
+```
+Unable to resolve service for type 'Tickset.Services.TokenService'
+```
+
+### Perbandingan Laravel
+
+| | Laravel | .NET |
+|--|---------|------|
+| Concrete class | **Auto-resolve**, tidak perlu daftar | **Wajib daftar** manual |
+| Interface | Daftar di Service Provider | Daftar manual |
+| Container | `app()->make(TokenService::class)` | `ActivatorUtilities` / DI container |
+
+```php
+// Laravel — concrete class auto-resolve, tidak perlu bind
+class AuthController {
+    public function __construct(TokenService $token) {} // langsung jalan
+}
+```
+
+```csharp
+// .NET — WAJIB daftar dulu, baru bisa inject
+builder.Services.AddScoped<TokenService>();  // wajib
+app.MapPost(..., (..., TokenService token) => ...);  // baru bisa
+```
+
+**Ini perbedaan utama:** DI container .NET "ketat" — tidak ada yang di-implicit. Laravel container lebih longgar untuk concrete class.
+
+### Kenapa Scoped?
+
+```csharp
+builder.Services.AddScoped<TokenService>();
+//            ^^^^^^
+```
+
+| Lifetime | Object dibuat | Mirip Laravel |
+|----------|---------------|---------------|
+| `Transient` | Setiap inject baru object | — |
+| `Scoped` | 1 object per request | request lifecycle |
+| `Singleton` | 1 object selama app hidup | container singleton |
+
+`Scoped` paling umum untuk service yang akses database (1 request = 1 `DbContext`). Karena semua service dalam satu request harus share `DbContext` yang sama, supaya perubahan data konsisten.
+
+## Kesalahan Konsep Umum: DI ≠ Async
+
+### Pertanyaan
+
+"Perlu ditambah ke service agar berjalan async, juga agar bisa berbagi DbContext?"
+
+### Jawaban: Keduanya bukan alasan pendaftaran DI
+
+**1. Async tidak ada hubungannya dengan DI.**
+
+Async datang dari `async/await` di dalam method:
+
+```csharp
+public async Task<User?> LoginAsync(LoginDto dto)
+//     ^^^^^                                    <- ini yang bikin async
+{
+    var user = await _context.Users.FirstOrDefaultAsync(...);
+    //           ^^^^^ EF Core versi async, non-blocking I/O
+}
+```
+
+`AddScoped<TokenService>()` tidak membuat apa pun jadi async. Method tanpa `async` tetap sync meski service sudah terdaftar di DI.
+
+**2. Berbagi DbContext adalah KONSEKUENSI dari lifetime `Scoped`, bukan tujuan pendaftaran.**
+
+Tiga hal terpisah:
+
+| Hal | Fungsi |
+|-----|--------|
+| `AddScoped<T>()` | Daftarkan ke container → supaya bisa di-inject |
+| Lifetime `Scoped` | 1 object per request → semua service share 1 DbContext |
+| `async/await` | Non-blocking I/O → thread tidak menunggu database |
+
+```text
+1 Request
+├── AuthService (Scoped) ─────┐
+├── TokenService (Scoped) ────┼── semua punya reference SAMA
+├── ApplicationDbContext ─────┘   ke 1 instance DbContext
+```
+
+### Kenapa share DbContext penting?
+
+```csharp
+await _authService.RegisterAsync(dto);   // DbContext: Users.Add(user)
+await _ticketService.CreateTicketAsync(); // DbContext: masih ada track "user" yang sama
+```
+
+Kalau tiap service punya `DbContext` sendiri (misal pakai `Singleton`), perubahan di service A tidak terlihat di service B → data tidak konsisten.
+
+**Mirip Laravel:** 1 request = 1 database transaction/session. Eloquent otomatis share connection dalam satu request.
+
+### Ringkasan
+
+- **Daftar DI** → supaya container bisa membuat & menginject object
+- **Lifetime Scoped** → supaya share DbContext per request
+- **async/await** → supaya I/O tidak memblokir thread (hubungannya di kode method, bukan di Program.cs)
+
+## Tujuan Utama DI Registration (ringkas)
+
+```csharp
+builder.Services.AddScoped<AuthService>();
+```
+
+Dua tujuan saja:
+
+1. **Otomatis membuat object** — endpoint menulis `AuthService auth` sebagai parameter, container membuat instance-nya (isi `ApplicationDbContext` ikut di-inject). Anda tidak perlu `new AuthService(context)` manual.
+2. **Mengatur umur object** — `Scoped` = hidup 1 request, lalu dibuang. Menentukan apakah object dibuat baru tiap inject (`Transient`), per request (`Scoped`), atau sekali saja (`Singleton`).
+
+```csharp
+// Tanpa DI — manual, ribet, salah lifetime
+var db = new DbContext(options);
+var service = new AuthService(db);
+var token = new TokenService(config);
+
+// Dengan DI — tulis parameter saja, container yang urus
+app.MapPost("/api/auth/login", async (LoginDto dto, AuthService auth, TokenService token) => ...);
+```
+
+**Mirip Laravel Service Provider:** `AppServiceProvider::register()` → `$this->app->bind(...)` — tujuannya sama: memberi tahu container cara membuat & kapan membuat object.
+
+## Token: Kapan Generate vs Kapan Baca
+
+### Kesalahan
+
+Endpoint `/me` memanggil `token.GenerateToken()` lagi — padahal token sudah dibuat saat login.
+
+### Aturannya
+
+| Aksi | Kapan | Siapa |
+|------|-------|-------|
+| **Generate** token | Login / Register / Refresh | Server, saat mengeluarkan kredensial |
+| **Baca** (decode) token | Setiap request terproteksi | Server, dari header `Authorization` |
+
+```text
+Login        → server HASILKAN token  → client SIMPAN
+Setiap call  → client KIRIM token (Authorization: Bearer xxx) → server BACA claims
+/me          → server BACA userId/email dari token → return. TIDAK generate baru.
+```
+
+### Kenapa /me tidak boleh generate token baru?
+
+1. **Token sudah ada di request** — `ClaimsPrincipal user` sudah berisi isi token (userId, email). Tinggal baca.
+2. **Token jadi tidak pernah expired** — kalau tiap request dapat token baru, `exp` 1 jam percuma. User tidak akan pernah logout.
+3. **Sia-sia** — client sudah punya token, mengapa dikasih lagi?
+
+### Perbandingan Laravel
+
+```php
+// Laravel — /me cukup BACA user dari token, tidak buat token baru
+Route::middleware('auth:api')->get('/me', function (Request $request) {
+    return $request->user();  // baca, bukan generate
+});
+```
+
+```csharp
+// .NET — sama: baca claims, jangan GenerateToken()
+app.MapGet("/api/auth/me", (ClaimsPrincipal user) => ...)
+```
+
+### Analogi sederhana
+
+- Token = **tiket masuk**. Login = dapat tiket. Setiap masuk gedung = tunjukkan tiket (baca), bukan dicetak tiket baru.
+
+## DTO per Arah dan per Endpoint
+
+### Pertanyaan
+
+"AuthResponseDto ada field Token, tapi endpoint /me tidak generate token — pakai DTO apa?"
+
+### Jawaban: beda endpoint = beda DTO response
+
+| Endpoint | Task | Response DTO |
+|----------|------|--------------|
+| `POST /auth/register` | Terbitkan token baru | `AuthResponseDto(Token, UserId, Email)` |
+| `POST /auth/login` | Terbitkan token baru | `AuthResponseDto(Token, UserId, Email)` |
+| `GET /auth/me` | Baca token lama saja | `MeResponseDto(UserId, Email)` — tanpa Token |
+
+```csharp
+// DTOs/AuthResponseDto.cs — hanya untuk login/register
+public record AuthResponseDto(string Token, Guid UserId, string Email);
+
+// DTOs/MeResponseDto.cs — untuk endpoint yang tidak menerbitkan token
+public record MeResponseDto(Guid UserId, string Email);
+```
+
+### Kenapa tidak satu DTO untuk semua?
+
+Kalau `AuthResponseDto` dipaksa untuk `/me`, ada 2 jalan buruk:
+1. **Generate token palsu** di `/me` → token tidak pernah expired (sudah dibahas sebelumnya)
+2. **Isi Token = string kosong** → client bingung, field yang tidak berguna
+
+**Prinsip:** DTO menggambarkan **apa yang benar-benar dikirim endpoint itu** — bukan semua data yang pernah ada.
+
+### Perbandingan Laravel
+
+```php
+// Laravel — beda endpoint beda resource/array
+return response()->json(['access_token' => $token, 'user' => $user]); // login
+return response()->json($user);                                        // /me
+```
+
+## DTO Wajib atau Anonymous Object?
+
+### Pertanyaan
+
+"Kenapa perlu buat DTO khusus untuk /me, bukankah bisa pakai object biasa?"
+
+### Jawaban
+
+Bisa keduanya, tapi konvensi project (AGENTS.md): **DTO = kontrak request/response**.
+
+```csharp
+// Boleh — anonymous object (ringkas, tapi tidak ada tipe)
+return Results.Ok(new { userId, email });
+
+// Dianjurkan — DTO (ada tipe, bisa di-reuse, client tahu bentuknya)
+return Results.Ok(new MeResponseDto(userId, email));
+```
+
+Kapan DTO wajib/penting:
+1. **Respons dipakai di banyak endpoint** → pakai 1 DTO, jangan duplikat anonymous
+2. **Client butuh tipe** → TanStack Query/TypeScript bisa generate tipe dari OpenAPI
+3. **Field banyak / bersarang** → anonymous object mudah salah ketik, DTO di-compile check
+
+Kapan anonymous cukup:
+- Response kecil, sekali pakai, tidak di-reuse.
+
+Untuk `/me`: 2 field, tapi dibuat DTO karena konvensi project — ringan, 1 baris.
+
+## Error: ArgumentNullException di JwtBearer Options
+
+### Gejala
+
+Login sukses (token tergenerate), tapi semua request gagal 500:
+
+```
+System.ArgumentNullException: Value cannot be null. (Parameter 's')
+   at System.Text.Encoding.GetBytes(String s)
+   at Program.cs:line 24 (AddJwtBearer options)
+```
+
+### Penyebab
+
+Key yang dibaca DI CONTOH berbeda dengan key yang ada di `appsettings.json`:
+
+```csharp
+// Program.cs — membaca "Jwt:Key"
+builder.Configuration["Jwt:Key"]        // ← null! di config tidak ada "Key"
+
+// appsettings.json — field-nya "Secret"
+"Jwt": { "Secret": "..." }             // ← ada "Secret", bukan "Key"
+```
+
+`Encoding.UTF8.GetBytes(null)` → melempar `ArgumentNullException`.
+
+**Kenapa login tetap jalan?** Karena `TokenService` membaca `Jwt:Secret` (benar). Hanya `AddJwtBearer` (validasi) yang salah baca.
+
+### Pelajaran penting
+
+1. **Configuration key salah = tidak di-compile check.** `builder.Configuration["Jwt:Key"]` tetap meng-compile walau key tidak ada — nilainya `null`. Error baru muncul saat runtime. (Beda dengan typo nama class/variable yang langsung error saat build.)
+2. **Dua tempat baca config harus konsisten** — `TokenService` (generate) dan `AddJwtBearer` (validate) harus pakai key yang sama.
+3. **`!` (null-forgiving) menyembunyikan peringatan, bukan masalah.** `_config["Jwt:Secret"]!` artinya "percaya ini tidak null" — kalau ternyata null, tetap crash di runtime.
+
+### Perbandingan Laravel
+
+```php
+// config/jwt.php + .env — konsistensi key
+config('jwt.secret');  // kalau .env kosong → error juga, tapi saat boot
+
+// .NET — configuration lookup tidak divalidasi saat boot
+builder.Configuration["Jwt:Key"];  // null, tidak ada error sampai dipakai
+```
+
+### Fix
+
+Samakan key: `Jwt:Key` → `Jwt:Secret` (atau ubah `appsettings.json`).
+
+## Checkpoint Phase 1 — Hasil Test Auth
+
+| Skenario | Status | HTTP |
+|----------|--------|------|
+| Login (password benar) | ✅ | 200 + token |
+| `/me` tanpa token | ✅ | 401 |
+| `/me` dengan token valid | ✅ | 200 + claims |
+| `/me` token palsu | ✅ | 401 |
+
+**Flow yang sudah jalan:**
+
+```text
+POST /auth/login → AuthService (cek password) → TokenService (generate JWT)
+       ↓
+GET/POST /auth/me + header "Authorization: Bearer <jwt>"
+       ↓
+UseAuthentication (decode JWT → ClaimsPrincipal) → RequireAuthorization (ada token? ✓)
+       ↓
+Endpoint baca claims → return data user
+```
+
+## JWT Stateless: 4 Pertanyaan Penting
+
+### 1. Kenapa token tidak disimpan di model/database?
+
+JWT bersifat **stateless** — semua data sudah ada DI DALAM token (userId, email, expiry) dan tanda tangan kriptografis. Server tidak perlu mencari token di database.
+
+```text
+JWT = envelope yang sudah disegel:
+{ userId, email, exp }  →  di-HMAC dengan secret  →  signature
+```
+
+| Pendekatan | Contoh Laravel | Simpan di DB? |
+|------------|----------------|---------------|
+| **Stateless JWT** (pakai kita) | JWT package | ❌ Tidak |
+| **Token di DB** | Laravel Sanctum personal access tokens | ✅ Ya |
+| **Session** | Laravel session driver database | ✅ Ya |
+
+**Trade-off stateless:**
+- ✅ Setiap request tidak perlu query database → cepat, mudah scale
+- ❌ Token tidak bisa di-revoke sebelum expired (logout global/blokir user susah)
+- Solusi nanti: **refresh token** yang disimpan di DB, atau token blacklist
+
+### 2. Kenapa `/me` tidak konsisten dengan `AuthResponseDto`?
+
+Karena **konsistensi bukan tujuan, kontrak yang benar adalah tujuan.**
+
+- Login/register → **menerbitkan** token baru → response harus ada token
+- `/me` → **membaca** token yang SUDAH dikirim client di header request → tidak ada token baru untuk dikembalikan
+
+Kalau `/me` ikut return token berarti setiap request menghasilkan token baru → token tidak pernah expired (sudah dibahas). DTO berbeda karena isi response berbeda — itu justru konsisten secara *meaning*.
+
+### 3. Kenapa expiry tidak di-set di model?
+
+**Expiry SUDAH di-set** — di dalam token, bukan di database:
+
+```csharp
+// TokenService.cs
+expires: DateTime.UtcNow.AddHours(1)   // ← ini
+```
+
+Isi token (payload):
+```json
+{
+  "identifier": "01a10f37-...",
+  "emailaddress": "andi@email.com",
+  "exp": 1791291211,        ← timestamp expiry, di-encode ke token
+  "iss": "TicksetApi",
+  "aud": "TicksetClient"
+}
+```
+
+**Kenapa tidak disimpan di model User?** Karena expiry adalah properti dari **token**, bukan dari user. User bisa punya banyak token (banyak device), tiap token punya expiry sendiri.
+
+### 4. Kalau token tidak disimpan, bagaimana cara cek valid?
+
+**Token mengecek dirinya sendiri secara matematis — tanpa database:**
+
+```text
+Request masuk dengan "Authorization: Bearer xxx"
+        ↓
+1. Split token → header.payload.signature
+2. Hitung ULANG: HMAC(header.payload, SECRET)
+3. Bandingkan hasil dengan signature yang dikirim
+   - Sama   → token asli, tidak dimanipulasi ✅
+   - Beda   → token palsu ❌ → 401
+4. Cek "exp" di payload vs waktu sekarang
+   - belum lewat → masih berlaku ✅
+   - sudah lewat → 401 expired
+```
+
+Konfigurasi validasi di `Program.cs`:
+```csharp
+ValidateIssuerSigningKey = true,   // cek signature dengan secret
+ValidateLifetime = true,            // cek exp
+```
+
+**Ini analogi tanda tangan digital:** siapa pun boleh membaca isi surat (payload), tapi hanya yang punya SECRET bisa membuat signature yang benar. Memalsukan isi surat membuat signature cocok → ketahuan.
+
+**Kenapa jadi tidak perlu generate token baru?**
+Client menyimpan token hasil login, mengirim token YANG SAMA di setiap request. Server cukup **memverifikasi** (murni hitungan, no DB), bukan membuat baru. Token baru hanya dibuat saat login ulang / token expired.
+
+### Kenapa validasi tidak butuh query database?
+
+Karena semua yang dibutuhkan ada di token:
+- **Siapa** → claim `identifier`
+- **Masih berlaku?** → claim `exp`
+- **Asli?** → signature vs secret
+
+Bandingkan Laravel Sanctum: cek token = query table `personal_access_tokens` (butuh DB). JWT: cek token = hitungan HMAC (tanpa DB).
+
+## Ringkasan Pemahaman JWT yang Benar
+
+```text
+1. LOGIN      → server generate JWT (sekali) → kirim ke client
+2. SIMPAN     → client yang menyimpan (localStorage / cookie / memory)
+3. KIRIM      → client lampirkan di header "Authorization: Bearer <jwt>" setiap request
+4. VALIDASI   → server verifikasi signature + expiry (HITUNGAN, tanpa query DB)
+5. BARU LAGI  → hanya saat login ulang atau token expired
+```
+
+### Koreksi kecil atas pemahaman "frontend urus penyimpanan"
+
+1. **Betul** — penyimpanan di client. Tapi *di mana* client menyimpan itu penting:
+   - `localStorage` → rentan XSS (script jahat bisa baca)
+   - `HttpOnly cookie` → aman dari XSS, tapi perlu mitigasi CSRF
+   - in-memory (state React/TanStack) → aman, tapi hilang saat refresh halaman
+2. **Betul** — backend cukup validasi tanpa simpan token ke DB.
+   Tapi backend TETAP menyimpan **secret** (di `appsettings.json`) — tanpa secret, validasi tidak mungkin.
+3. **Nuansa** — "stateless" itu *default*, bukan aturan mutlak. Server BOLEH menyimpan token jika butuh revocation (logout semua device, blokir user) → itu namanya blacklist/refresh token table.
