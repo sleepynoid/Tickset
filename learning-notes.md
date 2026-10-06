@@ -556,7 +556,7 @@ dotnet ef migrations remove
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=tickset;Username=REMOVED;Password=REMOVED"
+    "DefaultConnection": "Host=localhost;Port=5432;Database=tickset;Username=<user>;Password=<password>"
   },
   "Logging": {
     "LogLevel": {

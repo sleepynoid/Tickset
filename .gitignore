@@ -405,3 +405,15 @@ docker-compose.override.yml
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Jetbrains Rider
+.idea/
+
+# Test results / coverage
+[Tt]est[Rr]esults/
+*.coverage
+*.coveragexml
+
+# Local overrides (opsional pattern untuk config rahasia)
+appsettings.*.local.json
+*.local.json
